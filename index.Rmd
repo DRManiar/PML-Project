@@ -1,0 +1,157 @@
+---
+title: "Human Activity Recognition using Weight Lifting Exercises Dataset"
+author: "DRManiar"
+date: "9/26/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary  
+  
+The objective of this project is to use machine learning (ML) methods to recognize human activity using the weight lifting exercise dataset and to predict the manner (i.e., how well) in which the exercises were performed. The dataset is collected using personal wearable devices such as Jawbone Up, Nike FuelBand, and Fitbit. To speed up the process we will use parallel processing.  
+
+```{r message=FALSE, warning=FALSE}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+```
+
+## Dataset Exploration  
+  
+The *pml-training.csv* and *pml-testing.csv* files provided are loaded and the *pml-training.csv* file is explored to understand the data.  The data for this project come from this source: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har).  
+  
+```{r}
+training <- read.csv("pml-training.csv")
+dim(training)
+table(training$classe)
+```
+  
+The  "classe" variable in the training set identifies five ways in which Unilateral Dumbbell Biceps Curl were performed: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).  So this variable is the outcome we would like predict. Now, we are going to select the predictors.  
+  
+Out of `r nrow(training)` rows, many rows contain **NA** for many columns, so we will remove those columns from the dataset. Also, several columns contains blank character and we will remove those columns as well. Finally, the first seven columns contain general information for each measurement (i.e., row) so they will be removed too. The "classe" variable is changed to a factor variable.  
+  
+```{r}
+nnas <- sum(is.na(training$X))
+for (i in 2:ncol(training)){
+    nnas <- c(nnas, sum(is.na(training[,i])))
+}
+#
+scols <- c()
+for (i in 1:ncol(training)){
+    if (nnas[i]==0) scols <- c(scols,i)
+}
+train2 <- training[,scols]
+rmcol <- c(1:7,
+           grep("^kurtosis|^skewness|^max|^min|^amplitude", colnames(train2)))
+train3 <- train2[,-rmcol]
+train3$classe <- factor(train3$classe)
+dim(train3)
+```
+  
+The removal of columns reduced the number of columns from `r ncol(training)` to `r ncol(train3)`. So Now we will use the first `r ncol(train3)-1` columns as predictors for the "classe" variable.  
+  
+The "yaw_belt" variable is plotted for each measurement using "classe" as color.  
+  
+```{r message=FALSE, warning=FALSE}
+library(ggplot2)
+qplot(training$X,train3$yaw_belt,color=train3$classe)
+```
+  
+Now, let's remove the unwanted columns from the test dataset.  
+  
+```{r}
+testing <- read.csv("pml-testing.csv")
+test2 <- testing[,scols]
+test3 <- test2[,-rmcol]
+```
+  
+## Use of ML Methods
+  
+In this section, we will apply machine learning (ML) methods such as rpart, boosting (gbm), linear discriminant analysis (lda), and random forest (rf). We will use default parameters for cross validation for most methods.  
+  
+### **rpart** Method
+  
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+modFitRP <- train(classe~., data=train3, method="rpart", trControl = fitControl)
+cmRP <- confusionMatrix(train3$classe, predict(modFitRP, train3))
+round(prop.table(cmRP$table,2),2)
+round(cmRP$overall[1],2)
+predRP <- predict(modFitRP, test3)
+```
+  
+The accuracy of the **rpart** model is about `r round(cmRP$overall[1],2)*100`%. This is evident from the tree image below.
+  
+```{r message=FALSE, warning=FALSE}
+library(rattle)
+fancyRpartPlot(modFitRP$finalModel)
+```
+  
+### Other ML Methods
+  
+The boosting (gmb), linear discriminant analysis (lda), and random forest (rf) methods are used in a similar way as use of the rpart method above.  
+  
+```{r cache=TRUE}
+modFitGBM <- train(classe~., data=train3, method="gbm", verbose = FALSE,
+                   trControl = fitControl)
+cmGBM <- confusionMatrix(train3$classe, predict(modFitGBM, train3))
+round(prop.table(cmGBM$table,2),2)
+round(cmGBM$overall[1],2)
+predGBM <- predict(modFitGBM, test3)
+```
+  
+```{r cache=TRUE}
+modFitLDA <- train(classe~., data=train3, method="lda", trControl = fitControl)
+cmLDA <- confusionMatrix(train3$classe, predict(modFitLDA, train3))
+round(prop.table(cmLDA$table,2),2)
+round(cmLDA$overall[1],2)
+predLDA <- predict(modFitLDA, test3)
+```
+  
+```{r message=FALSE, warning=FALSE, cache=TRUE}
+modFitRF <- train(classe~., data=train3, method="rf", importance=TRUE,
+                  trControl = fitControl)
+cmRF <- confusionMatrix(train3$classe, predict(modFitRF,train3))
+round(prop.table(cmRF$table,2),2)
+round(cmRF$overall[1],2)
+predRF <- predict(modFitRF, test3)
+```
+  
+The above method shows that the random forest method is `r round(cmRF$overall[1],2)*100`% accurate (or `r round(1-cmRF$overall[1],2)*100`% in sample error) and boosting is about `r round(cmGBM$overall[1],2)*100`% accurate (or `r round(1-cmGBM$overall[1],2)*100`% in sample error). However, the out of sample error is expected to be higher than the in sample error. The lda and rpart methods perform poorly.  
+  
+## Results  
+  
+Accuracy for each model is provided below.  
+  
+```{r}
+Maccuracy <- data.frame("rpart" = round(cmRP$overall[1],2),
+                        "lda" = round(cmLDA$overall[1],2),
+                        "gbm" = round(cmGBM$overall[1],2),
+                        "rf" = round(cmRF$overall[1],2))
+Maccuracy
+```
+  
+The predictions for the test dataset from each model are provided below.  
+  
+```{r}
+predDF <- data.frame("rpart" = predRP,
+                     "lds" = predLDA,
+                     "gbm" = predGBM,
+                     "rf" = predRF)
+predDF
+```
+  
+So overall, the random forest method seems to be most accurate and the important predictors are plotted below. However, the random forest method takes a long time to run compared to the other methods.  
+  
+```{r fig.height=8.0}
+plot(varImp(modFitRF))
+stopCluster(cluster)
+registerDoSEQ()
+```
